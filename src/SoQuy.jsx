@@ -20,7 +20,17 @@ const fmt = (n) => {
   const v = Math.round(Number(n) || 0);
   return v.toLocaleString("vi-VN");
 };
-const todayISO = () => new Date().toISOString().slice(0, 10);
+// Chuyển 1 Date object thành chuỗi YYYY-MM-DD theo GIỜ ĐỊA PHƯƠNG (không dùng toISOString
+// vì hàm đó quy đổi sang UTC, gây lệch ngày ở múi giờ Việt Nam (UTC+7), ví dụ 00:00 giờ VN
+// ngày 5/7 sẽ bị đổi thành "2026-07-04" nếu dùng toISOString — đây là nguyên nhân gây lệch
+// ngày trong báo cáo/biểu đồ).
+const toISO = (d) => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+};
+const todayISO = () => toISO(new Date());
 const nowHM = () => {
   const d = new Date();
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
@@ -48,8 +58,102 @@ const addPeriod = (date, freq) => {
   if (freq === "nam") return addMonths(date, 12);
   return new Date(date);
 };
-const toISO = (d) => d.toISOString().slice(0, 10);
 const FREQ_LABEL = { ngay: "Hàng ngày", thang: "Hàng tháng", nam: "Hàng năm" };
+
+// ---------- Chèn định dạng (màu, viền, đóng băng dòng tiêu đề) vào file Excel xuất ra ----------
+// Thư viện "xlsx" miễn phí (SheetJS Community Edition) không hỗ trợ áp style khi ghi file,
+// nên phải chỉnh trực tiếp vào cấu trúc XML bên trong file .xlsx (bản chất là 1 file zip),
+// tương tự cách code này đã làm để chèn biểu đồ thật ở trên.
+const excelColLetter = (idx) => {
+  let n = idx + 1;
+  let s = "";
+  while (n > 0) {
+    const rem = (n - 1) % 26;
+    s = String.fromCharCode(65 + rem) + s;
+    n = Math.floor((n - 1) / 26);
+  }
+  return s;
+};
+
+// Thêm font/màu nền/viền/định dạng số vào styles.xml, trả về chỉ số style để dùng cho từng ô
+const buildStyledStylesXml = (xml) => {
+  const bumpCount = (tag) => {
+    const m = xml.match(new RegExp(`<${tag} count="(\\d+)">`));
+    return m ? parseInt(m[1], 10) : 0;
+  };
+
+  const fontIdx = bumpCount("fonts");
+  xml = xml.replace(/<fonts count="(\d+)">/, (_, c) => `<fonts count="${Number(c) + 1}">`);
+  xml = xml.replace(
+    "</fonts>",
+    `<font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Calibri"/><family val="2"/></font></fonts>`
+  );
+
+  const fillIdx = bumpCount("fills");
+  xml = xml.replace(/<fills count="(\d+)">/, (_, c) => `<fills count="${Number(c) + 1}">`);
+  xml = xml.replace(
+    "</fills>",
+    `<fill><patternFill patternType="solid"><fgColor rgb="FF1E1B4B"/><bgColor indexed="64"/></patternFill></fill></fills>`
+  );
+
+  const borderIdx = bumpCount("borders");
+  xml = xml.replace(/<borders count="(\d+)">/, (_, c) => `<borders count="${Number(c) + 1}">`);
+  xml = xml.replace(
+    "</borders>",
+    `<border><left style="thin"><color rgb="FFDDD9C8"/></left><right style="thin"><color rgb="FFDDD9C8"/></right><top style="thin"><color rgb="FFDDD9C8"/></top><bottom style="thin"><color rgb="FFDDD9C8"/></bottom><diagonal/></border></borders>`
+  );
+
+  const CURRENCY_FMT_ID = 164;
+  if (/<numFmts count="(\d+)">/.test(xml)) {
+    xml = xml.replace(/<numFmts count="(\d+)">/, (_, c) => `<numFmts count="${Number(c) + 1}">`);
+    xml = xml.replace("</numFmts>", `<numFmt numFmtId="${CURRENCY_FMT_ID}" formatCode="#,##0"/></numFmts>`);
+  } else {
+    xml = xml.replace(
+      /(<styleSheet[^>]*>)/,
+      `$1<numFmts count="1"><numFmt numFmtId="${CURRENCY_FMT_ID}" formatCode="#,##0"/></numFmts>`
+    );
+  }
+
+  const baseXf = bumpCount("cellXfs");
+  const HEADER_STYLE = baseXf;
+  const BODY_STYLE = baseXf + 1;
+  const CURRENCY_STYLE = baseXf + 2;
+  xml = xml.replace(/<cellXfs count="(\d+)">/, (_, c) => `<cellXfs count="${Number(c) + 3}">`);
+  xml = xml.replace(
+    "</cellXfs>",
+    `<xf numFmtId="0" fontId="${fontIdx}" fillId="${fillIdx}" borderId="${borderIdx}" xfId="0" applyFont="1" applyFill="1" applyBorder="1"><alignment horizontal="center" vertical="center"/></xf>` +
+      `<xf numFmtId="0" fontId="0" fillId="0" borderId="${borderIdx}" xfId="0" applyBorder="1"/>` +
+      `<xf numFmtId="${CURRENCY_FMT_ID}" fontId="0" fillId="0" borderId="${borderIdx}" xfId="0" applyNumberFormat="1" applyBorder="1"/>` +
+      `</cellXfs>`
+  );
+
+  return { xml, HEADER_STYLE, BODY_STYLE, CURRENCY_STYLE };
+};
+
+// Gán style vào từng ô của 1 sheet: dòng 1 = tiêu đề (màu nền + chữ trắng đậm), các dòng
+// còn lại = có viền, riêng cột tiền tệ được định dạng số có dấu phân cách hàng nghìn.
+// Đồng thời đóng băng dòng tiêu đề (freeze pane) để cuộn dữ liệu vẫn thấy tiêu đề.
+const applySheetTableStyle = (xml, numCols, numDataRows, currencyColIdx, styleIds) => {
+  const { HEADER_STYLE, BODY_STYLE, CURRENCY_STYLE } = styleIds;
+
+  xml = xml.replace(/<c r="([A-Za-z]+)1"/g, (_, col) => `<c r="${col}1" s="${HEADER_STYLE}"`);
+
+  for (let ci = 0; ci < numCols; ci++) {
+    const col = excelColLetter(ci);
+    const styleId = currencyColIdx.includes(ci) ? CURRENCY_STYLE : BODY_STYLE;
+    for (let r = 2; r <= numDataRows + 1; r++) {
+      const target = `<c r="${col}${r}"`;
+      xml = xml.replace(target, `${target} s="${styleId}"`);
+    }
+  }
+
+  xml = xml.replace(
+    /<sheetView workbookViewId="0"\/>/,
+    `<sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/><selection pane="bottomLeft"/></sheetView>`
+  );
+
+  return xml;
+};
 
 // Tính các ngày đến hạn của 1 khoản định kỳ, từ lần tạo gần nhất tới hôm nay (bắt kịp nếu bỏ lỡ)
 const getDueDates = (rule, todayIso) => {
@@ -537,7 +641,7 @@ export default function SoQuy() {
       for (let i = 6; i >= 0; i--) {
         const dd = new Date(d);
         dd.setDate(dd.getDate() - i);
-        const iso = dd.toISOString().slice(0, 10);
+        const iso = toISO(dd);
         const thu = transactions.filter((t) => t.date === iso && t.type === "thu").reduce((s, t) => s + Number(t.amount), 0);
         const chi = transactions.filter((t) => t.date === iso && t.type === "chi").reduce((s, t) => s + Number(t.amount), 0);
         buckets.push({ label: `${dd.getDate()}/${dd.getMonth() + 1}`, Thu: thu, Chi: chi });
@@ -566,7 +670,7 @@ export default function SoQuy() {
     if (reportMode === "ngay") d.setDate(d.getDate() + dir);
     else if (reportMode === "thang") d.setMonth(d.getMonth() + dir);
     else d.setFullYear(d.getFullYear() + dir);
-    setAnchorDate(d.toISOString().slice(0, 10));
+    setAnchorDate(toISO(d));
   };
 
   // ---------- Budgets ----------
@@ -590,10 +694,11 @@ export default function SoQuy() {
     await saveBudgets(next);
   };
 
-  // ---------- Export Excel ----------
+  // ---------- Export Excel (kèm biểu đồ thống kê) ----------
   const exportExcel = async (fromDate, toDate, fileLabel) => {
     try {
       const XLSX = await import("xlsx");
+      const JSZip = (await import("jszip")).default;
       const scoped = sorted.filter((t) => {
         if (fromDate && t.date < fromDate) return false;
         if (toDate && t.date > toDate) return false;
@@ -618,13 +723,14 @@ export default function SoQuy() {
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, "Giao dịch");
 
-      // summary sheet — tổng hợp theo tháng, chỉ tính trong phạm vi đã chọn
+      // sheet 2 — tổng hợp theo tháng, chỉ tính trong phạm vi đã chọn
       const summaryMap = {};
       scoped.forEach((t) => {
         const mk = monthKey(t.date);
         summaryMap[mk] = summaryMap[mk] || { thu: 0, chi: 0 };
         summaryMap[mk][t.type] += Number(t.amount);
       });
+      const SHEET2_NAME = "Tổng hợp theo tháng";
       const summaryRows = Object.entries(summaryMap)
         .sort(([a], [b]) => a.localeCompare(b))
         .map(([mk, v]) => ({
@@ -635,10 +741,177 @@ export default function SoQuy() {
         }));
       const ws2 = XLSX.utils.json_to_sheet(summaryRows);
       ws2["!cols"] = [{ wch: 10 }, { wch: 14 }, { wch: 14 }, { wch: 14 }];
-      XLSX.utils.book_append_sheet(wb, ws2, "Tổng hợp theo tháng");
+      XLSX.utils.book_append_sheet(wb, ws2, SHEET2_NAME);
 
-      XLSX.writeFile(wb, `so-quy-${fileLabel}.xlsx`);
-      showToast(`Đã xuất ${scoped.length} giao dịch ra Excel`);
+      // sheet 3 — tổng chi theo danh mục, chỉ tính trong phạm vi đã chọn (nguồn cho biểu đồ tròn)
+      const SHEET3_NAME = "Chi theo danh mục";
+      const catMap = {};
+      scoped.filter((t) => t.type === "chi").forEach((t) => {
+        catMap[t.category] = (catMap[t.category] || 0) + Number(t.amount);
+      });
+      const categoryRows = Object.entries(catMap)
+        .sort(([, a], [, b]) => b - a)
+        .map(([name, value]) => ({ "Danh mục": name, "Số tiền": value }));
+      let ws3 = null;
+      if (categoryRows.length > 0) {
+        ws3 = XLSX.utils.json_to_sheet(categoryRows);
+        ws3["!cols"] = [{ wch: 18 }, { wch: 14 }];
+        XLSX.utils.book_append_sheet(wb, ws3, SHEET3_NAME);
+      }
+
+      // ---- Áp định dạng: tô màu + chữ trắng đậm cho dòng tiêu đề, viền bảng, đóng băng
+      // dòng tiêu đề, và định dạng số có dấu phân cách hàng nghìn cho cột tiền ----
+      let stylesXml = await zip.file("xl/styles.xml").async("string");
+      const { xml: newStylesXml, HEADER_STYLE, BODY_STYLE, CURRENCY_STYLE } = buildStyledStylesXml(stylesXml);
+      zip.file("xl/styles.xml", newStylesXml);
+      const styleIds = { HEADER_STYLE, BODY_STYLE, CURRENCY_STYLE };
+
+      let sheet1xml = await zip.file("xl/worksheets/sheet1.xml").async("string");
+      sheet1xml = applySheetTableStyle(sheet1xml, 6, rows.length, [4], styleIds);
+      zip.file("xl/worksheets/sheet1.xml", sheet1xml);
+
+      let sheet2xml = await zip.file("xl/worksheets/sheet2.xml").async("string");
+      sheet2xml = applySheetTableStyle(sheet2xml, 4, summaryRows.length, [1, 2, 3], styleIds);
+      zip.file("xl/worksheets/sheet2.xml", sheet2xml);
+
+      if (ws3) {
+        let sheet3xml = await zip.file("xl/worksheets/sheet3.xml").async("string");
+        sheet3xml = applySheetTableStyle(sheet3xml, 2, categoryRows.length, [1], styleIds);
+        zip.file("xl/worksheets/sheet3.xml", sheet3xml);
+      }
+
+      // ---- Chèn biểu đồ thật (OOXML) vào file, vì thư viện xlsx miễn phí không hỗ trợ
+      // tạo biểu đồ trực tiếp — cần thao tác thủ công vào cấu trúc file .xlsx (vốn là 1 file zip) ----
+      const buf = XLSX.write(wb, { type: "array", bookType: "xlsx" });
+      const zip = await JSZip.loadAsync(buf);
+
+      const barChartXml = (lastRow) => `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <c:chart>
+    <c:title><c:tx><c:rich><a:bodyPr/><a:p><a:r><a:t>Thu - Chi theo tháng</a:t></a:r></a:p></c:rich></c:tx><c:overlay val="0"/></c:title>
+    <c:autoTitleDeleted val="0"/>
+    <c:plotArea>
+      <c:layout/>
+      <c:barChart>
+        <c:barDir val="col"/><c:grouping val="clustered"/><c:varyColors val="0"/>
+        <c:ser>
+          <c:idx val="0"/><c:order val="0"/>
+          <c:tx><c:strRef><c:f>'${SHEET2_NAME}'!$B$1</c:f><c:strCache><c:ptCount val="1"/><c:pt idx="0"><c:v>Tổng thu</c:v></c:pt></c:strCache></c:strRef></c:tx>
+          <c:spPr><a:solidFill><a:srgbClr val="10B981"/></a:solidFill></c:spPr>
+          <c:cat><c:strRef><c:f>'${SHEET2_NAME}'!$A$2:$A$${lastRow}</c:f></c:strRef></c:cat>
+          <c:val><c:numRef><c:f>'${SHEET2_NAME}'!$B$2:$B$${lastRow}</c:f></c:numRef></c:val>
+        </c:ser>
+        <c:ser>
+          <c:idx val="1"/><c:order val="1"/>
+          <c:tx><c:strRef><c:f>'${SHEET2_NAME}'!$C$1</c:f><c:strCache><c:ptCount val="1"/><c:pt idx="0"><c:v>Tổng chi</c:v></c:pt></c:strCache></c:strRef></c:tx>
+          <c:spPr><a:solidFill><a:srgbClr val="F43F5E"/></a:solidFill></c:spPr>
+          <c:cat><c:strRef><c:f>'${SHEET2_NAME}'!$A$2:$A$${lastRow}</c:f></c:strRef></c:cat>
+          <c:val><c:numRef><c:f>'${SHEET2_NAME}'!$C$2:$C$${lastRow}</c:f></c:numRef></c:val>
+        </c:ser>
+        <c:axId val="111111111"/><c:axId val="222222222"/>
+      </c:barChart>
+      <c:catAx><c:axId val="111111111"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="b"/><c:crossAx val="222222222"/></c:catAx>
+      <c:valAx><c:axId val="222222222"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="l"/><c:crossAx val="111111111"/></c:valAx>
+    </c:plotArea>
+    <c:legend><c:legendPos val="b"/></c:legend>
+    <c:plotVisOnly val="1"/>
+  </c:chart>
+</c:chartSpace>`;
+
+      const pieChartXml = (lastRow) => `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <c:chart>
+    <c:title><c:tx><c:rich><a:bodyPr/><a:p><a:r><a:t>Chi theo danh m${"\u1ee5"}c</a:t></a:r></a:p></c:rich></c:tx><c:overlay val="0"/></c:title>
+    <c:autoTitleDeleted val="0"/>
+    <c:plotArea>
+      <c:layout/>
+      <c:pieChart>
+        <c:varyColors val="1"/>
+        <c:ser>
+          <c:idx val="0"/><c:order val="0"/>
+          <c:tx><c:strRef><c:f>'${SHEET3_NAME}'!$B$1</c:f><c:strCache><c:ptCount val="1"/><c:pt idx="0"><c:v>Số tiền</c:v></c:pt></c:strCache></c:strRef></c:tx>
+          <c:cat><c:strRef><c:f>'${SHEET3_NAME}'!$A$2:$A$${lastRow}</c:f></c:strRef></c:cat>
+          <c:val><c:numRef><c:f>'${SHEET3_NAME}'!$B$2:$B$${lastRow}</c:f></c:numRef></c:val>
+        </c:ser>
+      </c:pieChart>
+    </c:plotArea>
+    <c:legend><c:legendPos val="b"/></c:legend>
+    <c:plotVisOnly val="1"/>
+  </c:chart>
+</c:chartSpace>`;
+
+      const mkDrawing = (rId, colFrom, colTo) => `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <xdr:twoCellAnchor>
+    <xdr:from><xdr:col>${colFrom}</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>1</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>
+    <xdr:to><xdr:col>${colTo}</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>20</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>
+    <xdr:graphicFrame macro="">
+      <xdr:nvGraphicFramePr><xdr:cNvPr id="2" name="Chart"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr>
+      <xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm>
+      <a:graphic>
+        <a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart">
+          <c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="${rId}"/>
+        </a:graphicData>
+      </a:graphic>
+    </xdr:graphicFrame>
+    <xdr:clientData/>
+  </xdr:twoCellAnchor>
+</xdr:wsDr>`;
+
+      const mkDrawingRels = (target) => `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="${target}"/>
+</Relationships>`;
+
+      const mkSheetRels = (drawingTarget) => `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="${drawingTarget}"/>
+</Relationships>`;
+
+      let contentTypeOverrides = "";
+
+      // Biểu đồ cột: Thu - Chi theo tháng, gắn vào sheet2.xml
+      zip.file("xl/charts/chart1.xml", barChartXml(1 + summaryRows.length));
+      zip.file("xl/drawings/drawing1.xml", mkDrawing("rId1", 6, 14));
+      zip.file("xl/drawings/_rels/drawing1.xml.rels", mkDrawingRels("../charts/chart1.xml"));
+      zip.file("xl/worksheets/_rels/sheet2.xml.rels", mkSheetRels("../drawings/drawing1.xml"));
+      let sheet2 = await zip.file("xl/worksheets/sheet2.xml").async("string");
+      sheet2 = sheet2.replace("</worksheet>", `<drawing r:id="rId1"/></worksheet>`);
+      zip.file("xl/worksheets/sheet2.xml", sheet2);
+      contentTypeOverrides +=
+        `<Override PartName="/xl/drawings/drawing1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>` +
+        `<Override PartName="/xl/charts/chart1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/>`;
+
+      // Biểu đồ tròn: Chi theo danh mục, gắn vào sheet3.xml (nếu có dữ liệu chi)
+      if (ws3) {
+        zip.file("xl/charts/chart2.xml", pieChartXml(1 + categoryRows.length));
+        zip.file("xl/drawings/drawing2.xml", mkDrawing("rId1", 4, 10));
+        zip.file("xl/drawings/_rels/drawing2.xml.rels", mkDrawingRels("../charts/chart2.xml"));
+        zip.file("xl/worksheets/_rels/sheet3.xml.rels", mkSheetRels("../drawings/drawing2.xml"));
+        let sheet3 = await zip.file("xl/worksheets/sheet3.xml").async("string");
+        sheet3 = sheet3.replace("</worksheet>", `<drawing r:id="rId1"/></worksheet>`);
+        zip.file("xl/worksheets/sheet3.xml", sheet3);
+        contentTypeOverrides +=
+          `<Override PartName="/xl/drawings/drawing2.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>` +
+          `<Override PartName="/xl/charts/chart2.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/>`;
+      }
+
+      let ct = await zip.file("[Content_Types].xml").async("string");
+      ct = ct.replace("</Types>", `${contentTypeOverrides}</Types>`);
+      zip.file("[Content_Types].xml", ct);
+
+      const finalBuf = await zip.generateAsync({ type: "uint8array" });
+      const blob = new Blob([finalBuf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `so-quy-${fileLabel}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      showToast(`Đã xuất ${scoped.length} giao dịch ra Excel (kèm biểu đồ)`);
     } catch (e) {
       console.error(e);
       showToast("Không thể xuất file, thử lại sau");
@@ -1119,7 +1392,7 @@ function ReportView({ reportMode, setReportMode, periodLabel, shiftPeriod, perio
             </ResponsiveContainer>
           </div>
           <div style={styles.legendWrap}>
-            {pieData.sort((a, b) => b.value - a.value).map((d) => (
+            {[...pieData].sort((a, b) => b.value - a.value).map((d) => (
               <div key={d.name} style={styles.legendItem}>
                 <div style={{ ...styles.legendDot, background: colorFor(d.name, catList) }} />
                 <span style={{ flex: 1 }}>{d.name}</span>
