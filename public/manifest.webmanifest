@@ -1,0 +1,15 @@
+{
+  "name": "Sổ Quỹ",
+  "short_name": "Sổ Quỹ",
+  "description": "Quản lý thu chi cá nhân",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#FBF9F3",
+  "theme_color": "#16211C",
+  "orientation": "portrait",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}
