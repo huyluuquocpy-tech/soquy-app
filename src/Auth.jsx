@@ -8,36 +8,25 @@ const LINE = "#E4E0D6";
 const PAPER = "#FBF9F3";
 const GOLD = "#B8860B";
 
+// Chỉ đăng nhập — không cho khách tự đăng ký. Tài khoản do người quản lý (chủ app)
+// tạo sẵn và cấp cho từng khách hàng.
 export default function Auth() {
-  const [mode, setMode] = useState("login"); // login | signup
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState(null);
   const [error, setError] = useState(null);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError(null);
-    setMessage(null);
     if (!email || !password) {
       setError("Vui lòng nhập đầy đủ email và mật khẩu.");
       return;
     }
-    if (password.length < 6) {
-      setError("Mật khẩu cần tối thiểu 6 ký tự.");
-      return;
-    }
     setLoading(true);
     try {
-      if (mode === "login") {
-        const { error } = await supabase.auth.signInWithPassword({ email, password });
-        if (error) throw error;
-      } else {
-        const { error } = await supabase.auth.signUp({ email, password });
-        if (error) throw error;
-        setMessage("Tạo tài khoản thành công! Nếu Supabase yêu cầu xác nhận email, hãy kiểm tra hộp thư rồi đăng nhập lại.");
-      }
+      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) throw error;
     } catch (err) {
       setError(err.message === "Invalid login credentials"
         ? "Sai email hoặc mật khẩu."
@@ -54,9 +43,7 @@ export default function Auth() {
           <div style={styles.logoBadge}><Wallet size={22} color="#fff" /></div>
           <div style={styles.title}>Sổ Quỹ</div>
         </div>
-        <div style={styles.subtitle}>
-          {mode === "login" ? "Đăng nhập để xem sổ quỹ của bạn" : "Tạo tài khoản mới"}
-        </div>
+        <div style={styles.subtitle}>Đăng nhập để xem sổ quỹ của bạn</div>
 
         <form onSubmit={handleSubmit} style={styles.form}>
           <input
@@ -70,27 +57,21 @@ export default function Auth() {
           />
           <input
             type="password"
-            placeholder="Mật khẩu (tối thiểu 6 ký tự)"
+            placeholder="Mật khẩu"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             style={styles.input}
           />
 
           {error && <div style={styles.errorBox}>{error}</div>}
-          {message && <div style={styles.messageBox}>{message}</div>}
 
           <button type="submit" style={styles.submitBtn} disabled={loading}>
             {loading ? <Loader2 size={16} className="spin" /> : null}
-            {mode === "login" ? "Đăng nhập" : "Đăng ký"}
+            Đăng nhập
           </button>
         </form>
 
-        <button
-          style={styles.switchBtn}
-          onClick={() => { setMode(mode === "login" ? "signup" : "login"); setError(null); setMessage(null); }}
-        >
-          {mode === "login" ? "Chưa có tài khoản? Đăng ký" : "Đã có tài khoản? Đăng nhập"}
-        </button>
+        <div style={styles.hint}>Chưa có tài khoản? Liên hệ để được cấp tài khoản.</div>
       </div>
       <style>{`
         @keyframes spin { to { transform: rotate(360deg); } }
@@ -149,22 +130,15 @@ const styles = {
     cursor: "pointer",
     marginTop: 4,
   },
-  switchBtn: {
+  hint: {
     width: "100%",
     marginTop: 14,
-    background: "none",
-    border: "none",
+    textAlign: "center",
     color: INK_SOFT,
-    fontSize: 13,
-    cursor: "pointer",
-    textDecoration: "underline",
+    fontSize: 12.5,
   },
   errorBox: {
     background: "#FBE4E1", color: "#B3261E",
-    padding: "8px 12px", borderRadius: 8, fontSize: 12.5,
-  },
-  messageBox: {
-    background: "#E3F2E9", color: "#1F7A5C",
     padding: "8px 12px", borderRadius: 8, fontSize: 12.5,
   },
 };
