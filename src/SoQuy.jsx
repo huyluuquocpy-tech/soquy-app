@@ -759,6 +759,10 @@ export default function SoQuy() {
         XLSX.utils.book_append_sheet(wb, ws3, SHEET3_NAME);
       }
 
+      // Tạo file .xlsx (dạng zip) từ workbook trước, sau đó mới áp style/biểu đồ vào bên trong
+      const buf = XLSX.write(wb, { type: "array", bookType: "xlsx" });
+      const zip = await JSZip.loadAsync(buf);
+
       // ---- Áp định dạng: tô màu + chữ trắng đậm cho dòng tiêu đề, viền bảng, đóng băng
       // dòng tiêu đề, và định dạng số có dấu phân cách hàng nghìn cho cột tiền ----
       let stylesXml = await zip.file("xl/styles.xml").async("string");
@@ -782,9 +786,6 @@ export default function SoQuy() {
 
       // ---- Chèn biểu đồ thật (OOXML) vào file, vì thư viện xlsx miễn phí không hỗ trợ
       // tạo biểu đồ trực tiếp — cần thao tác thủ công vào cấu trúc file .xlsx (vốn là 1 file zip) ----
-      const buf = XLSX.write(wb, { type: "array", bookType: "xlsx" });
-      const zip = await JSZip.loadAsync(buf);
-
       const barChartXml = (lastRow) => `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <c:chart>
