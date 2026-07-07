@@ -8,7 +8,7 @@ import { supabase } from "./lib/supabase";
 import {
   Plus, TrendingUp, TrendingDown, Wallet, Calendar,
   Download, Trash2, PenLine, X, ChevronDown, ChevronLeft, ChevronRight,
-  AlertTriangle, Settings2, PiggyBank, Repeat, Power,
+  AlertTriangle, Settings2, PiggyBank, Repeat, Power, Shield,
   Utensils, Car, Fuel, Home, Film, Gamepad2, Gift, HeartPulse,
   GraduationCap, ShoppingBag, Receipt, Plane, Shirt, Sparkles,
   PawPrint, Wrench, Banknote, TrendingUp as TrendingUpIcon,
@@ -267,7 +267,7 @@ const DEFAULT_CATS = {
   chi: ["Ăn uống", "Di chuyển", "Nhà cửa", "Giải trí", "Khác"],
 };
 
-export default function SoQuy() {
+export default function SoQuy({ isAdmin = false, onOpenAdmin } = {}) {
   const [ready, setReady] = useState(false);
   const [transactions, setTransactions] = useState([]);
   const [categories, setCategories] = useState(DEFAULT_CATS);
@@ -1094,6 +1094,9 @@ export default function SoQuy() {
         <NavBtn icon={<PiggyBank size={20} />} label="Ngân sách" active={view === "ngan-sach"} onClick={() => setView("ngan-sach")} />
         <NavBtn icon={<Repeat size={20} />} label="Định kỳ" active={view === "dinh-ky"} onClick={() => setView("dinh-ky")} />
         <NavBtn icon={<Download size={20} />} label="Xuất" active={view === "xuat"} onClick={() => setView("xuat")} />
+        {isAdmin && (
+          <NavBtn icon={<Shield size={20} />} label="Quản trị" active={false} onClick={onOpenAdmin} />
+        )}
       </nav>
 
       {toast && <div style={styles.toast}>{toast}</div>}

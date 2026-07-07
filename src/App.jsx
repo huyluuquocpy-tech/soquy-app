@@ -1,10 +1,13 @@
 import { useEffect, useState } from "react";
 import { supabase } from "./lib/supabase";
+import { ADMIN_EMAIL } from "./lib/adminConfig";
 import Auth from "./Auth";
 import SoQuy from "./SoQuy";
+import AdminPanel from "./AdminPanel";
 
 export default function App() {
   const [session, setSession] = useState(undefined); // undefined = đang kiểm tra
+  const [showAdmin, setShowAdmin] = useState(false);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session));
@@ -25,5 +28,17 @@ export default function App() {
     );
   }
 
-  return session ? <SoQuy /> : <Auth />;
+  if (!session) return <Auth />;
+
+  const isAdmin = !!(
+    session.user?.email &&
+    ADMIN_EMAIL &&
+    session.user.email.toLowerCase() === ADMIN_EMAIL.toLowerCase()
+  );
+
+  if (showAdmin && isAdmin) {
+    return <AdminPanel onBack={() => setShowAdmin(false)} />;
+  }
+
+  return <SoQuy isAdmin={isAdmin} onOpenAdmin={() => setShowAdmin(true)} />;
 }
